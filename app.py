@@ -122,6 +122,27 @@ WASTE_DB = {
             "Ise KAALE bin mein daalo, wet/dry waste se alag."
         ]
     },
+    "Biomedical/Anatomical Waste": {
+        "keywords": ["blood", "blood bag", "human tissue", "body part", "amputated part",
+                     "placenta", "body fluid", "animal carcass", "dead animal",
+                     "animal remains", "animal tissue", "slaughterhouse waste",
+                     "surgical waste", "human waste", "anatomical waste",
+                     "biopsy sample", "dialysis waste", "blood soaked", "used syringe with blood"],
+        "bin": "🟨 Yellow Biomedical Bag (Authorized Facility Only)",
+        "bin_hi": "🟨 Yellow Biomedical Bag (Authorized Facility Only)",
+        "steps": [
+            "Do NOT put this in any household bin — this is biomedical/anatomical waste.",
+            "This must only be handled by a hospital, clinic, veterinary facility, or authorized biomedical waste operator.",
+            "If you encounter this outside a medical setting, contact local municipal health authorities immediately.",
+            "Never attempt to handle, transport, or dispose of this yourself without protective equipment."
+        ],
+        "steps_hi": [
+            "Isse kisi bhi ghar ke bin mein bilkul mat daalo — yeh biomedical/anatomical waste hai.",
+            "Ise sirf hospital, clinic, veterinary facility ya authorized biomedical waste operator hi handle kare.",
+            "Agar yeh kahin ghar ke bahar mile, turant local municipal health authorities ko contact karo.",
+            "Bina protective equipment ke ise khud handle ya transport karne ki koshish kabhi mat karo."
+        ]
+    },
 }
 
 ECO_FACTS = [
@@ -181,7 +202,7 @@ def ai_fallback(user_input, lang="both"):
             system=(
                 "You are ECObot, a waste segregation guide for Indian users. Given an item, respond with: "
                 "first line = category name and bin color (Wet/Green, Dry-Recyclable/Blue, E-Waste/Yellow, "
-                "Hazardous/Red, or Sanitary-Reject/Black), then a numbered list of 2-4 short, practical "
+                "Hazardous/Red, Sanitary-Reject/Black, or Biomedical-Anatomical/Yellow-authorized-facility-only), then a numbered list of 2-4 short, practical "
                 f"disposal steps. {lang_instruction} Keep it concise and actionable."
             ),
             messages=[{"role": "user", "content": user_input}]
@@ -218,10 +239,11 @@ def classify_image(image_bytes, media_type=None, lang="both"):
             "both": "Respond in English first, then a '---' separator line, then the same content again in Hinglish (Hindi written in Roman script)."
         }[lang]
         prompt = (
-            "You are ECObot, a waste segregation guide for Indian users. Identify the item(s) "
-            "in this image, then respond in this exact format: first line = category name and "
-            "bin color (Wet/Green, Dry-Recyclable/Blue, E-Waste/Yellow, Hazardous/Red, or "
-            f"Sanitary-Reject/Black), then a numbered list of 2-4 short, practical disposal steps. {lang_instruction}"
+            "You are ECObot, a waste segregation guide for Indian users. Look at this image and respond "
+            "in this exact format: first line = 'Identified item: <name of the item(s) you see>', second "
+            "line = category name and bin color (Wet/Green, Dry-Recyclable/Blue, E-Waste/Yellow, "
+            "Hazardous/Red, Sanitary-Reject/Black, or Biomedical-Anatomical/Yellow-authorized-facility-only), then a numbered list of 2-4 short, practical "
+            f"disposal steps. {lang_instruction}"
         )
         response = model.generate_content([prompt, image])
         return response.text
