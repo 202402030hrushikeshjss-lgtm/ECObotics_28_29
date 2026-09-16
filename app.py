@@ -232,6 +232,13 @@ def classify_image(image_bytes, media_type=None, lang="both"):
         genai.configure(api_key=api_key)
         image = Image.open(io.BytesIO(image_bytes)).convert("RGB")
 
+        # Resize large images to speed up upload/processing (Gemini doesn't need full resolution)
+        max_dim = 800
+        if max(image.size) > max_dim:
+            ratio = max_dim / max(image.size)
+            new_size = (int(image.size[0] * ratio), int(image.size[1] * ratio))
+            image = image.resize(new_size)
+
         model = genai.GenerativeModel("gemini-flash-latest")
         lang_instruction = {
             "en": "Respond in English only.",
@@ -239,11 +246,19 @@ def classify_image(image_bytes, media_type=None, lang="both"):
             "both": "Respond in English first, then a '---' separator line, then the same content again in Hinglish (Hindi written in Roman script)."
         }[lang]
         prompt = (
-            "You are ECObot, a waste segregation guide for Indian users. Look at this image and respond "
-            "in this exact format: first line = 'Identified item: <name of the item(s) you see>', second "
-            "line = category name and bin color (Wet/Green, Dry-Recyclable/Blue, E-Waste/Yellow, "
-            "Hazardous/Red, Sanitary-Reject/Black, or Biomedical-Anatomical/Yellow-authorized-facility-only), then a numbered list of 2-4 short, practical "
-            f"disposal steps. {lang_instruction}"
+            "You are ECObot, a waste segregation guide for Indian users. Look at this image carefully. "
+            "First, determine whether it shows an actual physical waste item/object to be disposed of, "
+            "or whether it is a diagram, illustration, chart, screenshot, drawing, or other non-physical "
+            "representation (such as an educational anatomy diagram, a logo, or artwork). "
+            "If it is NOT an actual physical item to dispose of, respond only with: "
+            "'This looks like a diagram/illustration, not a physical waste item. Please upload a photo "
+            "of an actual item you want to dispose of.' (translate this message according to the language "
+            "instruction below). "
+            "If it IS an actual physical waste item, respond in this exact format: first line = "
+            "'Identified item: <name of the item(s) you see>', second line = category name and bin color "
+            "(Wet/Green, Dry-Recyclable/Blue, E-Waste/Yellow, Hazardous/Red, Sanitary-Reject/Black, or "
+            "Biomedical-Anatomical/Yellow-authorized-facility-only), then a numbered list of 2-4 short, "
+            f"practical disposal steps. {lang_instruction}"
         )
         response = model.generate_content([prompt, image])
         return response.text
@@ -265,9 +280,28 @@ if mode == "🧭 Guided Q&A (step-by-step)":
     if "guided_step" not in st.session_state:
         st.session_state.guided_step = 1
 
-    # Q1
-    st.write("**Q1: Is your item wet/organic, or dry?**")
-    q1 = st.radio("Select one:", ["Wet (food scraps, peels, leftovers)", "Dry (packaging, containers, paper)"], key="q1", index=None)
+    # Q0: Safety gate - biomedical/hazardous check before anything else
+    st.write("**Q0: Is this blood, human/animal tissue, body parts, or medical/surgical waste?**")
+    q0 = st.radio("Select one:", ["No, it's regular household waste", "Yes, it's biomedical/anatomical waste"], key="q0", index=None)
+
+    if q0 == "Yes, it's biomedical/anatomical waste":
+        st.error("**Answer:** Do NOT put this in any household bin. This must be handled only by an "
+                  "authorized hospital, clinic, veterinary facility, or biomedical waste operator. "
+                  "Contact local municipal health authorities if found outside a medical setting.")
+        st.divider()
+        if st.button("Restart guided flow", key="restart_q0"):
+            for k in ["q0", "q1", "q2_wet", "q2_dry", "q3_edata"]:
+                if k in st.session_state:
+                    del st.session_state[k]
+            st.rerun()
+        st.stop()
+
+    if q0 == "No, it's regular household waste":
+        # Q1
+        st.write("**Q1: Is your item wet/organic, or dry?**")
+        q1 = st.radio("Select one:", ["Wet (food scraps, peels, leftovers)", "Dry (packaging, containers, paper)"], key="q1", index=None)
+    else:
+        q1 = None
 
     if q1:
         if q1.startswith("Wet"):
@@ -302,7 +336,7 @@ if mode == "🧭 Guided Q&A (step-by-step)":
 
     st.divider()
     if st.button("Restart guided flow"):
-        for k in ["q1", "q2_wet", "q2_dry", "q3_edata"]:
+        for k in ["q0", "q1", "q2_wet", "q2_dry", "q3_edata"]:
             if k in st.session_state:
                 del st.session_state[k]
         st.rerun()
