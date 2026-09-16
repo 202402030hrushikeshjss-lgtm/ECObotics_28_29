@@ -197,7 +197,7 @@ def ai_fallback(user_input, lang="both"):
 #    Requires: pip install google-generativeai pillow
 #    Requires: GOOGLE_API_KEY set as an environment variable
 # ---------------------------
-def classify_image(image_bytes, media_type=None):
+def classify_image(image_bytes, media_type=None, lang="both"):
     try:
         import google.generativeai as genai
         from PIL import Image
@@ -212,11 +212,16 @@ def classify_image(image_bytes, media_type=None):
         image = Image.open(io.BytesIO(image_bytes)).convert("RGB")
 
         model = genai.GenerativeModel("gemini-flash-latest")
+        lang_instruction = {
+            "en": "Respond in English only.",
+            "hi": "Respond in Hinglish only (Hindi words written in Roman/English script).",
+            "both": "Respond in English first, then a '---' separator line, then the same content again in Hinglish (Hindi written in Roman script)."
+        }[lang]
         prompt = (
             "You are ECObot, a waste segregation guide for Indian users. Identify the item(s) "
             "in this image, then respond in this exact format: first line = category name and "
             "bin color (Wet/Green, Dry-Recyclable/Blue, E-Waste/Yellow, Hazardous/Red, or "
-            "Sanitary-Reject/Black), then a numbered list of 2-4 short, practical disposal steps."
+            f"Sanitary-Reject/Black), then a numbered list of 2-4 short, practical disposal steps. {lang_instruction}"
         )
         response = model.generate_content([prompt, image])
         return response.text
@@ -300,6 +305,10 @@ for msg in st.session_state.messages:
     with st.chat_message(msg["role"]):
         st.write(msg["content"])
 
+lang_choice = st.radio("Reply language / Jawab kis bhasha mein chahiye:",
+                       ["English", "Hinglish", "Both"], horizontal=True, index=2)
+lang_map = {"English": "en", "Hinglish": "hi", "Both": "both"}
+
 with st.expander("📷 Or upload/take a photo of the item"):
     uploaded_image = st.file_uploader("Upload an image", type=["png", "jpg", "jpeg"])
     camera_image = st.camera_input("Or take a photo")
@@ -312,14 +321,10 @@ with st.expander("📷 Or upload/take a photo of the item"):
             media_type = image_file.type if hasattr(image_file, "type") and image_file.type else "image/png"
 
             st.session_state.messages.append({"role": "user", "content": "[Uploaded an image]"})
-            reply = classify_image(image_bytes, media_type)
+            reply = classify_image(image_bytes, media_type, lang=lang_map[lang_choice])
             st.session_state.count += 1
             st.session_state.messages.append({"role": "assistant", "content": reply})
             st.rerun()
-
-lang_choice = st.radio("Reply language / Jawab kis bhasha mein chahiye:",
-                       ["English", "Hinglish", "Both"], horizontal=True, index=2)
-lang_map = {"English": "en", "Hinglish": "hi", "Both": "both"}
 
 st.write("**Quick pick — tap a common item:**")
 quick_items = ["chai patti", "milk packet", "old charger", "gutkha pouch", "diaper"]
