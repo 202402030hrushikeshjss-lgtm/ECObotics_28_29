@@ -260,26 +260,9 @@ def classify_image(image_bytes, media_type=None, lang="both"):
             "Biomedical-Anatomical/Yellow-authorized-facility-only), then a numbered list of 2-4 short, "
             f"practical disposal steps. {lang_instruction}"
         )
-        response = model.generate_content(
-            [prompt, image],
-            request_options={"timeout": 90}
-        )
+        response = model.generate_content([prompt, image])
         return response.text
     except Exception as e:
-        error_str = str(e)
-        if "504" in error_str or "Deadline" in error_str or "timeout" in error_str.lower():
-            # Retry once on timeout before giving up
-            try:
-                response = model.generate_content(
-                    [prompt, image],
-                    request_options={"timeout": 90}
-                )
-                return response.text
-            except Exception as e2:
-                return (f"The image analysis is timing out repeatedly ({e2}). This can happen when the "
-                        "app just woke up from sleep, or Google's servers are briefly slow. Try again in "
-                        "a few seconds, or try switching the language toggle to English only (single-language "
-                        "responses are faster than 'Both').")
         return (f"Image analysis failed ({e}). Make sure you've run: "
                 "pip install google-generativeai pillow — and that GOOGLE_API_KEY is set correctly.")
 
