@@ -35,7 +35,7 @@ WASTE_DB = {
         ]
     },
     "Dry Waste (Recyclable)": {
-        "keywords": ["plastic bottle", "paper", "newspaper", "cardboard", "carton",
+        "keywords": ["plastic bottle", "bottle", "water bottle", "paper", "newspaper", "cardboard", "carton",
                      "plastic bag", "wrapper", "glass bottle", "tin can", "metal can",
                      "aluminium foil", "magazine", "book", "plastic container",
                      "polythene", "polythene bag", "thaili", "carry bag", "kirana bag",
