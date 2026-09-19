@@ -9,6 +9,8 @@ st.set_page_config(page_title="ECObot - Waste Segregation Assistant", page_icon=
 WASTE_DB = {
     "Wet Waste (Organic/Biodegradable)": {
         "keywords": ["banana peel", "fruit peel", "vegetable peel", "food waste",
+                     "banana", "bananas", "apple", "orange peel", "mango peel",
+                     "fruit", "vegetables", "vegetable",
                      "tea leaves", "coffee grounds", "eggshell", "leftover food",
                      "flower", "leaf", "leaves", "meat", "fish bones", "bread",
                      "chai patti", "chai leaves", "sabzi chilka", "sabji peel",
