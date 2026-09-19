@@ -218,53 +218,56 @@ def ai_fallback(user_input, lang="both"):
 #    Requires: pip install google-generativeai pillow
 #    Requires: GOOGLE_API_KEY set as an environment variable
 # ---------------------------
-def classify_image(image_bytes, media_type=None, lang="both"):
+# ---------------------------
+# 3b. Image classification via FREE Hugging Face Inference API
+#    Uses BLIP to caption the image (name the item), then reuses our own
+#    waste dictionary + AI text fallback to classify the caption.
+#    Requires: an HF_API_TOKEN environment variable (free, from huggingface.co/settings/tokens)
+# ---------------------------
+def get_image_caption(image_bytes):
+    import requests, os
+    hf_token = os.environ.get("HF_API_TOKEN")
+    if not hf_token:
+        return None, "No Hugging Face API token found. Set the HF_API_TOKEN environment variable and restart."
+
+    api_url = "https://api-inference.huggingface.co/models/Salesforce/blip-image-captioning-base"
+    headers = {"Authorization": f"Bearer {hf_token}"}
+
     try:
-        import google.generativeai as genai
-        from PIL import Image
-        import io, os
+        response = requests.post(api_url, headers=headers, data=image_bytes, timeout=60)
+        if response.status_code == 503:
+            # Model is loading/cold - wait and retry once
+            import time
+            time.sleep(15)
+            response = requests.post(api_url, headers=headers, data=image_bytes, timeout=60)
 
-        api_key = os.environ.get("GOOGLE_API_KEY")
-        if not api_key:
-            return ("No Google API key found. Set the GOOGLE_API_KEY environment variable "
-                    "and restart the terminal, then try again.")
+        if response.status_code != 200:
+            return None, f"Hugging Face API error ({response.status_code}): {response.text[:200]}"
 
-        genai.configure(api_key=api_key)
-        image = Image.open(io.BytesIO(image_bytes)).convert("RGB")
-
-        # Resize large images to speed up upload/processing (Gemini doesn't need full resolution)
-        max_dim = 800
-        if max(image.size) > max_dim:
-            ratio = max_dim / max(image.size)
-            new_size = (int(image.size[0] * ratio), int(image.size[1] * ratio))
-            image = image.resize(new_size)
-
-        model = genai.GenerativeModel("gemini-flash-latest")
-        lang_instruction = {
-            "en": "Respond in English only.",
-            "hi": "Respond in Hinglish only (Hindi words written in Roman/English script).",
-            "both": "Respond in English first, then a '---' separator line, then the same content again in Hinglish (Hindi written in Roman script)."
-        }[lang]
-        prompt = (
-            "You are ECObot, a waste segregation guide for Indian users. Look at this image carefully. "
-            "First, determine whether it shows an actual physical waste item/object to be disposed of, "
-            "or whether it is a diagram, illustration, chart, screenshot, drawing, or other non-physical "
-            "representation (such as an educational anatomy diagram, a logo, or artwork). "
-            "If it is NOT an actual physical item to dispose of, respond only with: "
-            "'This looks like a diagram/illustration, not a physical waste item. Please upload a photo "
-            "of an actual item you want to dispose of.' (translate this message according to the language "
-            "instruction below). "
-            "If it IS an actual physical waste item, respond in this exact format: first line = "
-            "'Identified item: <name of the item(s) you see>', second line = category name and bin color "
-            "(Wet/Green, Dry-Recyclable/Blue, E-Waste/Yellow, Hazardous/Red, Sanitary-Reject/Black, or "
-            "Biomedical-Anatomical/Yellow-authorized-facility-only), then a numbered list of 2-4 short, "
-            f"practical disposal steps. {lang_instruction}"
-        )
-        response = model.generate_content([prompt, image])
-        return response.text
+        result = response.json()
+        caption = result[0].get("generated_text", "").strip()
+        if not caption:
+            return None, "Could not generate a caption for this image."
+        return caption, None
     except Exception as e:
-        return (f"Image analysis failed ({e}). Make sure you've run: "
-                "pip install google-generativeai pillow — and that GOOGLE_API_KEY is set correctly.")
+        return None, f"Image captioning failed: {e}"
+
+def classify_image(image_bytes, media_type=None, lang="both"):
+    caption, error = get_image_caption(image_bytes)
+    if error:
+        return (f"Image analysis failed. {error} Make sure you've set HF_API_TOKEN "
+                "(a free token from huggingface.co/settings/tokens).")
+
+    # Feed the caption into our existing keyword dictionary, same as Free Chat mode
+    category, data = match_waste(caption)
+    if category:
+        guide = format_guide(category, data, lang=lang)
+        return f"Identified item: {caption}\n\n{guide}"
+    else:
+        # Fall back to the AI text fallback (Gemini) using the caption as the query,
+        # or a plain message if that's also unavailable
+        fallback_reply = ai_fallback(caption, lang=lang)
+        return f"Identified item: {caption}\n\n{fallback_reply}"
 
 # ---------------------------
 # 4. Streamlit chat UI
