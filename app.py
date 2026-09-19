@@ -214,49 +214,40 @@ def ai_fallback(user_input, lang="both"):
                 "it differently, e.g. 'plastic bottle' or 'old phone charger'.")
 
 # ---------------------------
-# 3b. Image classification via Google Gemini (free tier)
-#    Requires: pip install google-generativeai pillow
-#    Requires: GOOGLE_API_KEY set as an environment variable
+# 3b. Image classification via FREE, fully OFFLINE local model
+#    Requires: pip install transformers torch pillow
+#    First run downloads the model (~1GB) from huggingface.co (the main site,
+#    NOT the api-inference subdomain) - needs internet once, then works fully offline.
 # ---------------------------
-# ---------------------------
-# 3b. Image classification via FREE Hugging Face Inference API
-#    Uses BLIP to caption the image (name the item), then reuses our own
-#    waste dictionary + AI text fallback to classify the caption.
-#    Requires: an HF_API_TOKEN environment variable (free, from huggingface.co/settings/tokens)
-# ---------------------------
+@st.cache_resource
+def load_caption_model():
+    from transformers import BlipProcessor, BlipForConditionalGeneration
+    model_name = "Salesforce/blip-image-captioning-base"
+    processor = BlipProcessor.from_pretrained(model_name)
+    model = BlipForConditionalGeneration.from_pretrained(model_name)
+    return processor, model
+
 def get_image_caption(image_bytes):
-    import requests, os
-    hf_token = os.environ.get("HF_API_TOKEN")
-    if not hf_token:
-        return None, "No Hugging Face API token found. Set the HF_API_TOKEN environment variable and restart."
-
-    api_url = "https://api-inference.huggingface.co/models/Salesforce/blip-image-captioning-base"
-    headers = {"Authorization": f"Bearer {hf_token}"}
-
     try:
-        response = requests.post(api_url, headers=headers, data=image_bytes, timeout=60)
-        if response.status_code == 503:
-            # Model is loading/cold - wait and retry once
-            import time
-            time.sleep(15)
-            response = requests.post(api_url, headers=headers, data=image_bytes, timeout=60)
-
-        if response.status_code != 200:
-            return None, f"Hugging Face API error ({response.status_code}): {response.text[:200]}"
-
-        result = response.json()
-        caption = result[0].get("generated_text", "").strip()
+        from PIL import Image
+        import io
+        processor, model = load_caption_model()
+        image = Image.open(io.BytesIO(image_bytes)).convert("RGB")
+        inputs = processor(image, return_tensors="pt")
+        out = model.generate(**inputs, max_new_tokens=30)
+        caption = processor.decode(out[0], skip_special_tokens=True).strip()
         if not caption:
             return None, "Could not generate a caption for this image."
         return caption, None
     except Exception as e:
-        return None, f"Image captioning failed: {e}"
+        return None, (f"Local image model failed to load or run ({e}). Make sure you've run: "
+                       "pip install transformers torch pillow — and that you had internet access "
+                       "for the first run (one-time model download).")
 
 def classify_image(image_bytes, media_type=None, lang="both"):
     caption, error = get_image_caption(image_bytes)
     if error:
-        return (f"Image analysis failed. {error} Make sure you've set HF_API_TOKEN "
-                "(a free token from huggingface.co/settings/tokens).")
+        return f"Image analysis failed. {error}"
 
     # Feed the caption into our existing keyword dictionary, same as Free Chat mode
     category, data = match_waste(caption)
@@ -268,6 +259,7 @@ def classify_image(image_bytes, media_type=None, lang="both"):
         # or a plain message if that's also unavailable
         fallback_reply = ai_fallback(caption, lang=lang)
         return f"Identified item: {caption}\n\n{fallback_reply}"
+
 
 # ---------------------------
 # 4. Streamlit chat UI
