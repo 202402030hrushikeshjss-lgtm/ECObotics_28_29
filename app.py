@@ -1,14 +1,7 @@
 import streamlit as st
 import re
-import os
-import io
-import random
-import hashlib
 
 st.set_page_config(page_title="ECObot - Waste Segregation Assistant", page_icon="♻️")
-
-# Change this to whichever Gemini model already works in your account.
-GEMINI_MODEL = "gemini-2.5-flash"
 
 # ---------------------------
 # 1. Waste category dictionary
@@ -16,8 +9,8 @@ GEMINI_MODEL = "gemini-2.5-flash"
 WASTE_DB = {
     "Wet Waste (Organic/Biodegradable)": {
         "keywords": ["banana peel", "fruit peel", "vegetable peel", "food waste",
-                     "banana", "apple", "orange peel", "mango peel",
-                     "fruit", "vegetable",
+                     "banana", "bananas", "apple", "orange peel", "mango peel",
+                     "fruit", "vegetables", "vegetable",
                      "tea leaves", "coffee grounds", "eggshell", "leftover food",
                      "flower", "leaf", "leaves", "meat", "fish bones", "bread",
                      "chai patti", "chai leaves", "sabzi chilka", "sabji peel",
@@ -43,7 +36,7 @@ WASTE_DB = {
     },
     "Dry Waste (Recyclable)": {
         "keywords": ["plastic bottle", "bottle", "water bottle", "paper", "newspaper", "cardboard", "carton",
-                     "plastic bag", "wrapper", "glass bottle", "tin can", "metal can", "can",
+                     "plastic bag", "wrapper", "glass bottle", "tin can", "metal can",
                      "aluminium foil", "magazine", "book", "plastic container",
                      "polythene", "polythene bag", "thaili", "carry bag", "kirana bag",
                      "doodh packet", "milk packet", "milk pouch", "dahi packet",
@@ -97,7 +90,7 @@ WASTE_DB = {
                      "medicine strip", "insulin", "mosquito coil", "hit spray",
                      "phenyl bottle", "detergent bottle", "gutkha", "gutka pouch",
                      "paan masala pouch", "bidi", "cigarette", "firecracker waste",
-                     "cracker waste", "hand sanitizer bottle", "hand sanitizer"],
+                     "cracker waste", "hand sanitizer bottle"],
         "bin": "🔴 Hazardous Waste Point",
         "bin_hi": "🔴 Hazardous Waste Point",
         "steps": [
@@ -162,22 +155,16 @@ ECO_FACTS = [
     "E-waste is the fastest-growing waste stream in the world.",
 ]
 
-FALLBACK_ERROR_PREFIX = "I couldn't"
-
 # ---------------------------
 # 2. Matching logic
-#    Whole-word match + longest keyword wins across ALL categories,
-#    so "human tissue" beats "tissue" and "hand sanitizer bottle" beats "bottle".
 # ---------------------------
 def match_waste(user_input):
     text = user_input.lower()
-    best_len, best_cat, best_data = 0, None, None
     for category, data in WASTE_DB.items():
-        for kw in data["keywords"]:
-            if len(kw) > best_len and re.search(rf"\b{re.escape(kw)}(?:s|es)?\b", text):
-                best_len, best_cat, best_data = len(kw), category, data
-    return best_cat, best_data
-
+        for keyword in data["keywords"]:
+            if keyword in text:
+                return category, data
+    return None, None
 
 def format_guide(category, data, lang="both"):
     lines = []
@@ -197,62 +184,42 @@ def format_guide(category, data, lang="both"):
             lines.append(f"{i}. {step}")
     return "\n".join(lines)
 
-
 # ---------------------------
-# 3. Gemini fallback (item not in dictionary, or a general question)
-#    Key comes from Streamlit secrets or an environment variable - never hardcode it.
+# 3. AI fallback (optional - only runs if no keyword match)
+#    Requires: pip install anthropic
+#    Requires: an ANTHROPIC_API_KEY set as an environment variable
 # ---------------------------
-def get_google_key():
-    try:
-        return st.secrets["GOOGLE_API_KEY"]
-    except Exception:
-        return os.environ.get("GOOGLE_API_KEY")
-
-
-def get_gemini_model():
-    import google.generativeai as genai
-    key = get_google_key()
-    if not key:
-        raise RuntimeError("GOOGLE_API_KEY not set")
-    genai.configure(api_key=key)
-    return genai.GenerativeModel(GEMINI_MODEL)
-
-
 def ai_fallback(user_input, lang="both"):
-    """Returns (text, ok). ok=False means the AI call failed."""
-    lang_instruction = {
-        "en": "Respond in English only.",
-        "hi": "Respond in Hinglish only (Hindi words written in Roman/English script).",
-        "both": "Respond in English first, then a '---' separator, then the same content in Hinglish (Hindi written in Roman script).",
-    }[lang]
-    prompt = (
-        "You are ECObot, a waste segregation and sustainability assistant for Indian users.\n"
-        "Decide what the user input is:\n"
-        "1) A waste ITEM: reply with the first line = category and bin "
-        "(Wet/Green, Dry-Recyclable/Blue, E-Waste/Yellow collection point, Hazardous/Red, "
-        "Sanitary-Reject/Black, or Biomedical/Yellow-authorized-facility-only), then 2-4 short numbered disposal steps.\n"
-        "2) A QUESTION about waste, recycling, composting or sustainability: answer it clearly in 3-6 sentences.\n"
-        "3) Unrelated to waste/environment: politely say you only help with waste and sustainability.\n"
-        "If the item involves blood, human/animal tissue or medical waste, say it must go only to an "
-        "authorized biomedical waste facility. If you are unsure, say so instead of guessing. "
-        "Bin colors can vary by municipality.\n"
-        f"{lang_instruction} Keep it concise.\n\nUser input: {user_input}"
-    )
     try:
-        model = get_gemini_model()
-        resp = model.generate_content(prompt)
-        text = (resp.text or "").strip()
-        if not text:
-            raise RuntimeError("empty response")
-        return text, True
-    except Exception:
-        return (f"{FALLBACK_ERROR_PREFIX} answer that right now (AI service unavailable or not configured). "
-                "Try a simpler item name, e.g. 'plastic bottle' or 'old phone charger'."), False
-
+        import anthropic
+        client = anthropic.Anthropic()  # reads ANTHROPIC_API_KEY from environment
+        lang_instruction = {
+            "en": "Respond in English only.",
+            "hi": "Respond in Hinglish only (Hindi words written in Roman/English script).",
+            "both": "Respond in English first, then a '---' separator, then the same content in Hinglish (Hindi written in Roman script)."
+        }[lang]
+        response = client.messages.create(
+            model="claude-sonnet-4-5",
+            max_tokens=300,
+            system=(
+                "You are ECObot, a waste segregation guide for Indian users. Given an item, respond with: "
+                "first line = category name and bin color (Wet/Green, Dry-Recyclable/Blue, E-Waste/Yellow, "
+                "Hazardous/Red, Sanitary-Reject/Black, or Biomedical-Anatomical/Yellow-authorized-facility-only), then a numbered list of 2-4 short, practical "
+                f"disposal steps. {lang_instruction} Keep it concise and actionable."
+            ),
+            messages=[{"role": "user", "content": user_input}]
+        )
+        return response.content[0].text
+    except Exception as e:
+        return ("I couldn't identify that item from my local database, and the "
+                "AI fallback isn't configured (no API key set). Try describing "
+                "it differently, e.g. 'plastic bottle' or 'old phone charger'.")
 
 # ---------------------------
-# 3b. Image classification via local BLIP caption model
-#     Requires: transformers, torch, pillow. Heavy for free-tier hosting.
+# 3b. Image classification via FREE, fully OFFLINE local model
+#    Requires: pip install transformers torch pillow
+#    First run downloads the model (~1GB) from huggingface.co (the main site,
+#    NOT the api-inference subdomain) - needs internet once, then works fully offline.
 # ---------------------------
 @st.cache_resource
 def load_caption_model():
@@ -262,10 +229,10 @@ def load_caption_model():
     model = BlipForConditionalGeneration.from_pretrained(model_name)
     return processor, model
 
-
 def get_image_caption(image_bytes):
     try:
         from PIL import Image
+        import io
         processor, model = load_caption_model()
         image = Image.open(io.BytesIO(image_bytes)).convert("RGB")
         inputs = processor(image, return_tensors="pt")
@@ -275,153 +242,112 @@ def get_image_caption(image_bytes):
             return None, "Could not generate a caption for this image."
         return caption, None
     except Exception as e:
-        return None, f"Local image model failed to load or run ({e})."
+        return None, (f"Local image model failed to load or run ({e}). Make sure you've run: "
+                       "pip install transformers torch pillow — and that you had internet access "
+                       "for the first run (one-time model download).")
 
-
-def classify_image(image_bytes, lang="both"):
-    """Returns (reply, ok)."""
+def classify_image(image_bytes, media_type=None, lang="both"):
     caption, error = get_image_caption(image_bytes)
     if error:
-        return f"{FALLBACK_ERROR_PREFIX} analyse the image. {error}", False
+        return f"Image analysis failed. {error}"
+
+    # Feed the caption into our existing keyword dictionary, same as Free Chat mode
     category, data = match_waste(caption)
     if category:
-        return f"Identified (approximate): {caption}\n\n{format_guide(category, data, lang=lang)}", True
-    reply, ok = ai_fallback(caption, lang=lang)
-    return f"Identified (approximate): {caption}\n\n{reply}", ok
+        guide = format_guide(category, data, lang=lang)
+        return f"Identified item: {caption}\n\n{guide}"
+    else:
+        # Fall back to the AI text fallback (Gemini) using the caption as the query,
+        # or a plain message if that's also unavailable
+        fallback_reply = ai_fallback(caption, lang=lang)
+        return f"Identified item: {caption}\n\n{fallback_reply}"
 
 
 # ---------------------------
-# 3c. Voice (optional): Gemini transcription + gTTS speech (English only)
-# ---------------------------
-def transcribe(audio_bytes):
-    try:
-        model = get_gemini_model()
-        r = model.generate_content([
-            "Transcribe this audio exactly. If it is Hindi, write it in Roman script (Hinglish). "
-            "Output only the transcript.",
-            {"mime_type": "audio/wav", "data": audio_bytes},
-        ])
-        return (r.text or "").strip()
-    except Exception:
-        return ""
-
-
-def speak(text):
-    try:
-        from gtts import gTTS
-        english = text.split("---")[0]
-        clean = re.sub(r"[^\w\s.,!?'-]", " ", english)
-        clean = re.sub(r"\s+", " ", clean).strip()[:500]
-        if not clean:
-            return
-        buf = io.BytesIO()
-        gTTS(text=clean, lang="en").write_to_fp(buf)
-        st.audio(buf.getvalue(), format="audio/mp3", autoplay=True)
-    except Exception:
-        pass
-
-
-# ---------------------------
-# 4. Streamlit UI
+# 4. Streamlit chat UI
 # ---------------------------
 st.title("♻️ ECObot")
-st.caption("Your waste segregation assistant. Bin colors may vary by municipality — follow your local rules if they differ.")
+st.caption("Your waste segregation assistant")
 
 mode = st.radio("Choose mode:", ["💬 Free chat (type any item)", "🧭 Guided Q&A (step-by-step)"], horizontal=True)
-
-GUIDED_KEYS = ["q0", "q1", "q2_wet", "q2_dry", "q3_edata"]
-
-
-def reset_guided():
-    for k in GUIDED_KEYS:
-        st.session_state.pop(k, None)
-
 
 if mode == "🧭 Guided Q&A (step-by-step)":
     st.subheader("Guided Waste Segregation Assistant")
 
-    # Q0: safety gate
+    if "guided_step" not in st.session_state:
+        st.session_state.guided_step = 1
+
+    # Q0: Safety gate - biomedical/hazardous check before anything else
     st.write("**Q0: Is this blood, human/animal tissue, body parts, or medical/surgical waste?**")
-    q0 = st.radio("Select one:", ["No, it's regular household waste",
-                                  "Yes, it's biomedical/anatomical waste"], key="q0", index=None)
+    q0 = st.radio("Select one:", ["No, it's regular household waste", "Yes, it's biomedical/anatomical waste"], key="q0", index=None)
 
     if q0 == "Yes, it's biomedical/anatomical waste":
         st.error("**Answer:** Do NOT put this in any household bin. This must be handled only by an "
-                 "authorized hospital, clinic, veterinary facility, or biomedical waste operator. "
-                 "Contact local municipal health authorities if found outside a medical setting.")
-        st.button("Restart guided flow", key="restart_q0", on_click=reset_guided)
+                  "authorized hospital, clinic, veterinary facility, or biomedical waste operator. "
+                  "Contact local municipal health authorities if found outside a medical setting.")
+        st.divider()
+        if st.button("Restart guided flow", key="restart_q0"):
+            for k in ["q0", "q1", "q2_wet", "q2_dry", "q3_edata"]:
+                if k in st.session_state:
+                    del st.session_state[k]
+            st.rerun()
         st.stop()
 
-    if q0:
-        # Q1: broad type
-        st.write("**Q1: What kind of item is it?**")
-        q1 = st.radio("Select one:", [
-            "Food / organic (peels, leftovers, flowers)",
-            "Packaging (paper, plastic, glass, metal)",
-            "Electronic / battery-powered",
-            "Medicine / chemical / paint / pesticide",
-            "Hygiene (diaper, pad, mask, bandage, tissue)",
-        ], key="q1", index=None)
+    if q0 == "No, it's regular household waste":
+        # Q1
+        st.write("**Q1: Is your item wet/organic, or dry?**")
+        q1 = st.radio("Select one:", ["Wet (food scraps, peels, leftovers)", "Dry (packaging, containers, paper)"], key="q1", index=None)
+    else:
+        q1 = None
 
-        if q1:
-            if q1.startswith("Food"):
-                st.write("**Q2: Does it still have a lot of liquid in it?**")
-                q2 = st.radio("Select one:", ["Yes, it's wet/liquid-heavy", "No, mostly dry scraps"],
-                              key="q2_wet", index=None)
-                if q2:
-                    if q2.startswith("Yes"):
-                        st.success("**Answer:** Drain the liquid first, then put it in the 🟢 GREEN bin. "
-                                   "Liquid waste can contaminate other recyclables if mixed.")
-                    else:
-                        st.success("**Answer:** Put it directly in the 🟢 GREEN bin for composting. "
-                                   "No extra prep needed.")
-
-            elif q1.startswith("Packaging"):
-                st.write("**Q2: Is it contaminated with food or liquid?**")
-                q2 = st.radio("Select one:", ["Yes, it has food/liquid residue", "No, it's clean"],
-                              key="q2_dry", index=None)
-                if q2:
-                    if q2.startswith("Yes"):
-                        st.success("**Answer:** Rinse it first, then put it in the 🔵 BLUE bin for recycling. "
-                                   "If it can't be cleaned (greasy paper, for example), use the ⚫ BLACK/reject bin.")
-                    else:
-                        st.success("**Answer:** Put it in the 🔵 BLUE bin for recycling. "
-                                   "Flatten boxes and bottles to save space.")
-
-            elif q1.startswith("Electronic"):
-                st.write("**Q2: Does it contain personal data (phone, laptop, pendrive)?**")
-                q3 = st.radio("Select one:", ["Yes", "No"], key="q3_edata", index=None)
-                if q3:
-                    if q3 == "Yes":
-                        st.success("**Answer:** Wipe/erase your data first, then drop it at an authorized "
-                                   "🟡 E-WASTE collection point. Never bin it with household waste.")
-                    else:
-                        st.success("**Answer:** Take it to an authorized 🟡 E-WASTE collection point. "
-                                   "Remove the battery separately if possible.")
-
-            elif q1.startswith("Medicine"):
-                st.success("**Answer:** Do NOT pour it down the drain or mix it with other trash. Keep it in its "
-                           "original container, away from children and pets, and hand it to a pharmacy or a "
-                           "🔴 HAZARDOUS waste collection point.")
-
-            else:
-                st.success("**Answer:** Wrap it fully in paper or a small bag, do NOT flush it, and put it in "
-                           "the ⚫ BLACK/reject bin, separate from wet and dry waste.")
+    if q1:
+        if q1.startswith("Wet"):
+            # Wet branch -> Q2
+            st.write("**Q2: Does it still have a lot of liquid in it?**")
+            q2 = st.radio("Select one:", ["Yes, it's wet/liquid-heavy", "No, mostly dry scraps"], key="q2_wet", index=None)
+            if q2:
+                if q2.startswith("Yes"):
+                    st.success("**Answer:** Drain the liquid first, then put it in the 🟢 GREEN bin. "
+                               "Liquid waste can contaminate other recyclables if mixed.")
+                else:
+                    st.success("**Answer:** Put it directly in the 🟢 GREEN bin for composting. "
+                               "No extra prep needed.")
+        else:
+            # Dry branch -> Q2
+            st.write("**Q2: Does it have a battery, plug, or electronic circuit?**")
+            q2 = st.radio("Select one:", ["Yes, it's electronic/battery-powered", "No, it's plain packaging/paper/plastic"], key="q2_dry", index=None)
+            if q2:
+                if q2.startswith("Yes"):
+                    # Q3 for e-waste branch
+                    st.write("**Q3: Does it contain personal data (phone, laptop, pendrive)?**")
+                    q3 = st.radio("Select one:", ["Yes", "No"], key="q3_edata", index=None)
+                    if q3:
+                        if q3 == "Yes":
+                            st.success("**Answer:** Wipe/erase your data first, then drop it at an authorized "
+                                       "🟡 E-WASTE collection point. Never bin it with household waste.")
+                        else:
+                            st.success("**Answer:** Take it to an authorized 🟡 E-WASTE collection point. "
+                                       "Remove the battery separately if possible.")
+                else:
+                    st.success("**Answer:** Rinse if food-contaminated, then put it in the 🔵 BLUE bin for recycling.")
 
     st.divider()
-    st.button("Restart guided flow", on_click=reset_guided)
-    st.stop()
+    if st.button("Restart guided flow"):
+        for k in ["q0", "q1", "q2_wet", "q2_dry", "q3_edata"]:
+            if k in st.session_state:
+                del st.session_state[k]
+        st.rerun()
+
+    st.stop()  # don't render free-chat UI below in guided mode
 
 
-# ---------------------------
-# Free chat mode
-# ---------------------------
 if "messages" not in st.session_state:
     st.session_state.messages = [
-        {"role": "assistant", "content": "Hi! I'm ECObot 👋 Tell me an item, or ask a question about waste, and I'll help."}
+        {"role": "assistant", "content": "Hi! I'm ECObot 👋 Tell me an item and I'll tell you how to dispose of it correctly."}
     ]
     st.session_state.count = 0
 
+import random
 if "fact" not in st.session_state:
     st.session_state.fact = random.choice(ECO_FACTS)
 
@@ -432,47 +358,27 @@ for msg in st.session_state.messages:
     with st.chat_message(msg["role"]):
         st.write(msg["content"])
 
-# Play queued voice reply (set on the previous run, before st.rerun)
-if st.session_state.get("to_speak"):
-    speak(st.session_state.pop("to_speak"))
-
 lang_choice = st.radio("Reply language / Jawab kis bhasha mein chahiye:",
                        ["English", "Hinglish", "Both"], horizontal=True, index=2)
-lang = {"English": "en", "Hinglish": "hi", "Both": "both"}[lang_choice]
+lang_map = {"English": "en", "Hinglish": "hi", "Both": "both"}
 
-# Image input
 with st.expander("📷 Or upload/take a photo of the item"):
     uploaded_image = st.file_uploader("Upload an image", type=["png", "jpg", "jpeg"])
     camera_image = st.camera_input("Or take a photo")
+
     image_file = uploaded_image or camera_image
     if image_file is not None:
         st.image(image_file, width=200)
         if st.button("Identify this item"):
+            image_bytes = image_file.getvalue()
+            media_type = image_file.type if hasattr(image_file, "type") and image_file.type else "image/png"
+
             st.session_state.messages.append({"role": "user", "content": "[Uploaded an image]"})
-            reply, ok = classify_image(image_file.getvalue(), lang=lang)
-            if ok:
-                st.session_state.count += 1
+            reply = classify_image(image_bytes, media_type, lang=lang_map[lang_choice])
+            st.session_state.count += 1
             st.session_state.messages.append({"role": "assistant", "content": reply})
             st.rerun()
 
-# Voice input (needs Streamlit >= 1.39)
-voice_text = None
-if hasattr(st, "audio_input"):
-    with st.expander("🎤 Ask by voice (replies are spoken in English only)"):
-        audio = st.audio_input("Record your question")
-        if audio is not None:
-            audio_bytes = audio.getvalue()
-            audio_hash = hashlib.md5(audio_bytes).hexdigest()
-            if st.session_state.get("last_audio") != audio_hash:
-                st.session_state.last_audio = audio_hash
-                with st.spinner("Transcribing..."):
-                    heard = transcribe(audio_bytes)
-                if heard:
-                    voice_text = heard
-                else:
-                    st.warning("Couldn't understand the audio. Please try again or type instead.")
-
-# Quick picks
 st.write("**Quick pick — tap a common item:**")
 quick_items = ["chai patti", "milk packet", "old charger", "gutkha pouch", "diaper"]
 cols = st.columns(len(quick_items))
@@ -481,25 +387,24 @@ for col, item in zip(cols, quick_items):
     if col.button(item):
         quick_pick = item
 
-user_input = st.chat_input("Type an item or ask a question, e.g. 'newspaper' or 'why segregate waste?'")
-final_input = quick_pick or user_input or voice_text
-from_voice = bool(voice_text) and not (quick_pick or user_input)
+user_input = st.chat_input("Type any item, e.g. 'newspaper' or 'broken charger'...")
+final_input = quick_pick or user_input
 
 if final_input:
     st.session_state.messages.append({"role": "user", "content": final_input})
+    with st.chat_message("user"):
+        st.write(final_input)
 
     category, data = match_waste(final_input)
+
     if category:
-        reply = format_guide(category, data, lang=lang)
-        ok = True
-    else:
-        reply, ok = ai_fallback(final_input, lang=lang)
-
-    if ok:
+        reply = format_guide(category, data, lang=lang_map[lang_choice])
         st.session_state.count += 1
+    else:
+        reply = ai_fallback(final_input, lang=lang_map[lang_choice])
+        st.session_state.count += 1
+
     st.session_state.messages.append({"role": "assistant", "content": reply})
-
-    if from_voice and ok and lang != "hi":
-        st.session_state.to_speak = reply
-
+    with st.chat_message("assistant"):
+        st.write(reply)
     st.rerun()
