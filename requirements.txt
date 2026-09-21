@@ -1,5 +1,6 @@
-streamlit
+streamlit>=1.40
 google-generativeai
-pillow
-torch
+gTTS
 transformers
+torch
+pillow
