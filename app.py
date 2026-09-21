@@ -191,29 +191,41 @@ def format_guide(category, data, lang="both"):
 # ---------------------------
 def ai_fallback(user_input, lang="both"):
     try:
-        import anthropic
-        client = anthropic.Anthropic()  # reads ANTHROPIC_API_KEY from environment
+        import google.generativeai as genai
+        import os
+
+        api_key = os.environ.get("GOOGLE_API_KEY")
+        if not api_key:
+            return ("No Google API key found. Set the GOOGLE_API_KEY environment variable "
+                    "and restart the terminal, then try again.")
+
+        genai.configure(api_key=api_key)
+        model = genai.GenerativeModel("gemini-flash-latest")
+
         lang_instruction = {
             "en": "Respond in English only.",
             "hi": "Respond in Hinglish only (Hindi words written in Roman/English script).",
             "both": "Respond in English first, then a '---' separator, then the same content in Hinglish (Hindi written in Roman script)."
         }[lang]
-        response = client.messages.create(
-            model="claude-sonnet-4-5",
-            max_tokens=300,
-            system=(
-                "You are ECObot, a waste segregation guide for Indian users. Given an item, respond with: "
-                "first line = category name and bin color (Wet/Green, Dry-Recyclable/Blue, E-Waste/Yellow, "
-                "Hazardous/Red, Sanitary-Reject/Black, or Biomedical-Anatomical/Yellow-authorized-facility-only), then a numbered list of 2-4 short, practical "
-                f"disposal steps. {lang_instruction} Keep it concise and actionable."
-            ),
-            messages=[{"role": "user", "content": user_input}]
+        prompt = (
+            "You are ECObot, a waste segregation assistant for Indian users. The user has typed "
+            "something that didn't match a known item in your local database. Decide which of these "
+            "two cases applies, and respond accordingly:\n\n"
+            "CASE 1 - It names a specific item to dispose of (even an unusual one): respond with "
+            "first line = category name and bin color (Wet/Green, Dry-Recyclable/Blue, E-Waste/Yellow, "
+            "Hazardous/Red, Sanitary-Reject/Black, or Biomedical-Anatomical/Yellow-authorized-facility-only), "
+            "then a numbered list of 2-4 short, practical disposal steps.\n\n"
+            "CASE 2 - It's a general question about waste, recycling, composting, sustainability, or "
+            "the environment (not a specific item to dispose of): answer the question directly and "
+            "helpfully in 2-4 sentences, staying focused on waste/environment topics.\n\n"
+            "If the input is entirely unrelated to waste or the environment, politely say you can only "
+            f"help with waste segregation and disposal topics. {lang_instruction} Keep responses concise."
         )
-        return response.content[0].text
+        response = model.generate_content(f"{prompt}\n\nUser input: {user_input}")
+        return response.text
     except Exception as e:
-        return ("I couldn't identify that item from my local database, and the "
-                "AI fallback isn't configured (no API key set). Try describing "
-                "it differently, e.g. 'plastic bottle' or 'old phone charger'.")
+        return (f"I couldn't identify that item from my local database, and the AI fallback failed ({e}). "
+                "Try describing it differently, e.g. 'plastic bottle' or 'old phone charger'.")
 
 # ---------------------------
 # 3b. Image classification via FREE, fully OFFLINE local model
@@ -264,179 +276,120 @@ def classify_image(image_bytes, media_type=None, lang="both"):
 
 
 # ---------------------------
-# 3c. Interactive guided flow
-# ---------------------------
-BIO = "Biomedical/Anatomical Waste"
-HAZ = "Hazardous Waste"
-SAN = "Sanitary/Reject Waste"
-WET = "Wet Waste (Organic/Biodegradable)"
-DRY = "Dry Waste (Recyclable)"
-EWS = "E-Waste"
-
-# Each node: question (en/hi) + options [(label, next)].
-# next = another node id (str) OR a result dict {"cat", "note", "note_hi"}.
-GUIDED_TREE = {
-    "start": {
-        "q": "Is this blood, human/animal tissue, body parts, or medical/surgical waste?",
-        "q_hi": "Kya yeh blood, human/animal tissue, body part ya medical/surgical waste hai?",
-        "opts": [
-            ("No, regular household waste", "type"),
-            ("Yes, biomedical waste", {"cat": BIO, "note": "", "note_hi": ""}),
-        ],
-    },
-    "type": {
-        "q": "What kind of item is it?",
-        "q_hi": "Yeh kis type ka item hai?",
-        "opts": [
-            ("🍌 Food / organic", "wet"),
-            ("📦 Packaging (paper, plastic, glass, metal)", "pack"),
-            ("🔌 Electronic / battery", "edata"),
-            ("💊 Medicine / chemical / paint / pesticide", {"cat": HAZ, "note": "", "note_hi": ""}),
-            ("🧻 Hygiene (diaper, pad, mask, bandage, tissue)", {"cat": SAN, "note": "", "note_hi": ""}),
-            ("❓ Not sure / something else", {"cat": None, "note": "", "note_hi": ""}),
-        ],
-    },
-    "wet": {
-        "q": "Does it still have a lot of liquid in it?",
-        "q_hi": "Kya isme abhi bhi bahut liquid hai?",
-        "opts": [
-            ("Yes, liquid-heavy", {"cat": WET,
-                                   "note": "Drain the liquid first so it doesn't leak or contaminate other bins.",
-                                   "note_hi": "Pehle liquid nikaal lo taaki doosre bins gande na ho."}),
-            ("No, mostly dry scraps", {"cat": WET, "note": "", "note_hi": ""}),
-        ],
-    },
-    "pack": {
-        "q": "Is it clean, or does it have food/liquid residue?",
-        "q_hi": "Kya yeh saaf hai, ya isme khana/liquid laga hai?",
-        "opts": [
-            ("Clean and dry", {"cat": DRY, "note": "", "note_hi": ""}),
-            ("Has food/liquid residue", {"cat": DRY,
-                                         "note": "Rinse it first. If it can't be cleaned (very greasy), use the black reject bin.",
-                                         "note_hi": "Pehle dho lo. Agar saaf nahi ho sakta (bahut chikna), toh kaale reject bin mein daalo."}),
-        ],
-    },
-    "edata": {
-        "q": "Does it store personal data (phone, laptop, pendrive)?",
-        "q_hi": "Kya isme personal data store hota hai (phone, laptop, pendrive)?",
-        "opts": [
-            ("Yes", {"cat": EWS, "note": "Back up and wipe your data BEFORE handing it over.",
-                     "note_hi": "Dene se PEHLE apna data backup aur wipe karo."}),
-            ("No", {"cat": EWS, "note": "", "note_hi": ""}),
-        ],
-    },
-}
-
-GUIDED_WHY = {
-    WET: "Wet waste becomes compost. Mixing it with plastic ruins both.",
-    DRY: "Clean dry waste can be recycled. Dirty recyclables often end up in landfill.",
-    EWS: "E-waste holds toxic metals and valuable materials, so it needs proper recycling.",
-    HAZ: "Chemicals and medicines can poison soil and water if binned or poured away.",
-    SAN: "Sanitary waste is a health risk to sanitation workers, so it is kept separate.",
-    BIO: "Biomedical waste can carry infection, so only authorized facilities may handle it.",
-}
-
-
-def _g_pick(node_id, question, label, nxt):
-    ss = st.session_state
-    ss.g_trail.append((node_id, question, label))
-    if isinstance(nxt, dict):
-        ss.g_result = nxt
-        ss.g_done += 1
-        ss.g_celebrate = nxt["cat"] not in (None, BIO)
-    else:
-        ss.g_node = nxt
-
-
-def _g_back():
-    ss = st.session_state
-    if ss.g_trail:
-        if ss.g_result is not None:
-            ss.g_done = max(0, ss.g_done - 1)
-        node_id, _, _ = ss.g_trail.pop()
-        ss.g_node = node_id
-        ss.g_result = None
-        ss.g_celebrate = False
-
-
-def _g_reset():
-    ss = st.session_state
-    ss.g_node, ss.g_trail, ss.g_result, ss.g_celebrate = "start", [], None, False
-
-
-def render_guided():
-    ss = st.session_state
-    ss.setdefault("g_node", "start")
-    ss.setdefault("g_trail", [])
-    ss.setdefault("g_result", None)
-    ss.setdefault("g_done", 0)
-    ss.setdefault("g_celebrate", False)
-
-    st.subheader("🧭 Guided Waste Segregation Assistant")
-    g_lang_choice = st.radio("Language / Bhasha:", ["English", "Hinglish", "Both"],
-                             horizontal=True, index=2, key="g_lang")
-    glang = {"English": "en", "Hinglish": "hi", "Both": "both"}[g_lang_choice]
-    st.metric("Items guided this session", ss.g_done)
-
-    # Trail of answers so far
-    if ss.g_trail:
-        st.caption("Your answers: " + "  →  ".join(label for _, _, label in ss.g_trail))
-
-    # ---------- RESULT ----------
-    if ss.g_result is not None:
-        res = ss.g_result
-        cat = res["cat"]
-        st.progress(1.0, text="Done")
-
-        if cat is None:
-            st.info("I can't place this one with a few questions. Switch to **💬 Free chat** and type "
-                    "the item's name (or ask a question) and I'll look it up.")
-        else:
-            data = WASTE_DB[cat]
-            box = st.error if cat == BIO else st.success
-            box(format_guide(cat, data, lang=glang))
-            if res["note"]:
-                if glang in ("en", "both"):
-                    st.warning("⚠️ " + res["note"])
-                if glang in ("hi", "both"):
-                    st.warning("⚠️ " + res["note_hi"])
-            st.info("💡 Why: " + GUIDED_WHY[cat])
-            if ss.g_celebrate:
-                st.balloons()
-                ss.g_celebrate = False
-
-        c1, c2 = st.columns(2)
-        c1.button("⬅ Back (change last answer)", on_click=_g_back, key="g_back_res")
-        c2.button("🔄 Sort another item", on_click=_g_reset, key="g_new")
-        return
-
-    # ---------- QUESTION ----------
-    node = GUIDED_TREE[ss.g_node]
-    st.progress(min(len(ss.g_trail) / 3, 0.9), text=f"Step {len(ss.g_trail) + 1}")
-
-    if glang in ("en", "both"):
-        st.markdown(f"### {node['q']}")
-    if glang in ("hi", "both"):
-        (st.caption if glang == "both" else st.markdown)(node["q_hi"])
-
-    for i, (label, nxt) in enumerate(node["opts"]):
-        st.button(label, key=f"g_{ss.g_node}_{i}", use_container_width=True,
-                  on_click=_g_pick, args=(ss.g_node, node["q"], label, nxt))
-
-    if ss.g_trail:
-        st.button("⬅ Back", on_click=_g_back, key="g_back_q")
-
-
-# ---------------------------
 # 4. Streamlit chat UI
 # ---------------------------
 st.title("♻️ ECObot")
 st.caption("Your waste segregation assistant")
 
-mode = st.radio("Choose mode:", ["💬 Free chat (type any item)", "🧭 Guided Q&A (step-by-step)"], horizontal=True)
+mode_options = ["💬 Free chat (type any item)", "🧭 Guided Q&A (step-by-step)"]
+default_index = mode_options.index(st.session_state.pop("mode_override")) if "mode_override" in st.session_state else 0
+mode = st.radio("Choose mode:", mode_options, horizontal=True, index=default_index)
 
 if mode == "🧭 Guided Q&A (step-by-step)":
-    render_guided()
+    st.subheader("Guided Waste Segregation Assistant")
+
+    if "guided_step" not in st.session_state:
+        st.session_state.guided_step = 1
+
+    trail = []  # builds the human-readable answer trail as we go
+
+    # Q0: Safety gate - biomedical/hazardous check before anything else
+    st.progress(1/4, text="Step 1 of up to 4")
+    st.write("**Q0: Is this blood, human/animal tissue, body parts, or medical/surgical waste?**")
+    q0 = st.radio("Select one:", ["No, it's regular household waste", "Yes, it's biomedical/anatomical waste"], key="q0", index=None)
+
+    if q0 == "Yes, it's biomedical/anatomical waste":
+        st.caption("Trail: Biomedical/anatomical → Yes")
+        st.error("**Answer:** Do NOT put this in any household bin. This must be handled only by an "
+                  "authorized hospital, clinic, veterinary facility, or biomedical waste operator. "
+                  "Contact local municipal health authorities if found outside a medical setting.")
+        st.caption("Why: biological/medical waste can spread infection and needs sterile, regulated disposal — never mixed with regular trash.")
+        st.divider()
+        if st.button("Restart guided flow", key="restart_q0"):
+            for k in ["q0", "q1", "q2_wet", "q2_dry", "q3_edata"]:
+                if k in st.session_state:
+                    del st.session_state[k]
+            st.rerun()
+        st.stop()
+
+    if q0 == "No, it's regular household waste":
+        trail.append("Biomedical? No")
+        # Q1
+        st.progress(2/4, text="Step 2 of up to 4")
+        st.write("**Q1: Is your item wet/organic, or dry?**")
+        q1 = st.radio("Select one:", ["Wet (food scraps, peels, leftovers)", "Dry (packaging, containers, paper)"], key="q1", index=None)
+    else:
+        q1 = None
+
+    if q1:
+        trail.append("Wet" if q1.startswith("Wet") else "Dry")
+        if q1.startswith("Wet"):
+            # Wet branch -> Q2
+            st.caption("Trail: " + " → ".join(trail))
+            st.progress(3/4, text="Step 3 of up to 4")
+            st.write("**Q2: Does it still have a lot of liquid in it?**")
+            q2 = st.radio("Select one:", ["Yes, it's wet/liquid-heavy", "No, mostly dry scraps"], key="q2_wet", index=None)
+            if q2:
+                trail.append("Liquid-heavy" if q2.startswith("Yes") else "Mostly dry")
+                st.caption("Trail: " + " → ".join(trail))
+                st.progress(1.0, text="Done")
+                if q2.startswith("Yes"):
+                    st.success("**Answer:** Drain the liquid first, then put it in the 🟢 GREEN bin. "
+                               "Liquid waste can contaminate other recyclables if mixed.")
+                    st.caption("Why: liquid dripping from wet waste can soak nearby dry/recyclable waste, ruining its recycling value.")
+                else:
+                    st.success("**Answer:** Put it directly in the 🟢 GREEN bin for composting. "
+                               "No extra prep needed.")
+                    st.caption("Why: organic matter with little moisture composts cleanly without extra draining.")
+        else:
+            # Dry branch -> Q2
+            st.caption("Trail: " + " → ".join(trail))
+            st.progress(3/4, text="Step 3 of up to 4")
+            st.write("**Q2: Does it have a battery, plug, or electronic circuit?**")
+            q2 = st.radio("Select one:", ["Yes, it's electronic/battery-powered", "No, it's plain packaging/paper/plastic"], key="q2_dry", index=None)
+            if q2:
+                if q2.startswith("Yes"):
+                    trail.append("Electronic")
+                    st.caption("Trail: " + " → ".join(trail))
+                    st.progress(0.9, text="Step 4 of up to 4")
+                    # Q3 for e-waste branch
+                    st.write("**Q3: Does it contain personal data (phone, laptop, pendrive)?**")
+                    q3 = st.radio("Select one:", ["Yes", "No"], key="q3_edata", index=None)
+                    if q3:
+                        trail.append("Has personal data" if q3 == "Yes" else "No personal data")
+                        st.caption("Trail: " + " → ".join(trail))
+                        st.progress(1.0, text="Done")
+                        if q3 == "Yes":
+                            st.success("**Answer:** Wipe/erase your data first, then drop it at an authorized "
+                                       "🟡 E-WASTE collection point. Never bin it with household waste.")
+                            st.caption("Why: e-waste contains toxic metals (lead, mercury) AND unwiped devices risk leaking your personal data.")
+                        else:
+                            st.success("**Answer:** Take it to an authorized 🟡 E-WASTE collection point. "
+                                       "Remove the battery separately if possible.")
+                            st.caption("Why: electronics contain heavy metals that contaminate soil/water if landfilled — batteries especially.")
+                else:
+                    trail.append("Not electronic")
+                    st.caption("Trail: " + " → ".join(trail))
+                    st.progress(1.0, text="Done")
+                    st.success("**Answer:** Rinse if food-contaminated, then put it in the 🔵 BLUE bin for recycling.")
+                    st.caption("Why: clean dry materials like paper, cardboard, and plastic retain their recycling value.")
+
+    st.divider()
+    col1, col2 = st.columns(2)
+    with col1:
+        if st.button("🔄 Restart guided flow"):
+            for k in ["q0", "q1", "q2_wet", "q2_dry", "q3_edata"]:
+                if k in st.session_state:
+                    del st.session_state[k]
+            st.rerun()
+    with col2:
+        if st.button("🤷 Not sure / something else — switch to Free Chat"):
+            st.session_state.mode_override = "💬 Free chat (type any item)"
+            for k in ["q0", "q1", "q2_wet", "q2_dry", "q3_edata"]:
+                if k in st.session_state:
+                    del st.session_state[k]
+            st.rerun()
+
     st.stop()  # don't render free-chat UI below in guided mode
 
 
